@@ -47,6 +47,19 @@ local function closeSearch(searchId, reason)
     end
 end
 
+local function sanitizeReport(report)
+    report = type(report) == 'table' and report or {}
+
+    return {
+        weapons = report.weapons == true,
+        drugs = report.drugs == true,
+        explosives = report.explosives == true,
+        largeCash = report.largeCash == true,
+        evidence = report.evidence == true,
+        other = tostring(report.other or ''):sub(1, 1000)
+    }
+end
+
 RegisterNetEvent('drill_k9:server:clientReady', function()
     local sourceId = source
     Utils.Debug('Client ready: %s (%s)', GetPlayerName(sourceId) or 'unknown', sourceId)
@@ -108,10 +121,9 @@ RegisterNetEvent('drill_k9:server:startPersonSearch', function(targetSource)
     end)
 end)
 
-RegisterNetEvent('drill_k9:server:submitPersonSearch', function(searchId, inventory)
+RegisterNetEvent('drill_k9:server:submitPersonSearch', function(searchId, report)
     local targetSource = source
     searchId = tonumber(searchId)
-    inventory = tostring(inventory or ''):sub(1, 1000)
 
     local search = activePersonSearches[searchId]
 
@@ -119,9 +131,15 @@ RegisterNetEvent('drill_k9:server:submitPersonSearch', function(searchId, invent
         return
     end
 
-    if inventory:match('^%s*$') then
+    if not playersNear(search.handler, targetSource) then
+        closeSearch(searchId, 'The player moved too far away.')
         return
     end
+
+    local sanitizedReport = sanitizeReport(report)
+    local alert = sanitizedReport.weapons
+        or sanitizedReport.drugs
+        or sanitizedReport.explosives
 
     activePersonSearches[searchId] = nil
 
@@ -132,7 +150,8 @@ RegisterNetEvent('drill_k9:server:submitPersonSearch', function(searchId, invent
             'drill_k9:client:personSearchResult',
             search.handler,
             {
-                inventory = inventory,
+                report = sanitizedReport,
+                alert = alert,
                 targetName = GetPlayerName(targetSource) or 'Player',
                 targetSource = targetSource
             }
