@@ -1,8 +1,8 @@
 --========================================================--
 -- drill_k9
 -- File: client/ai/navigation.lua
--- Description: Central K9 navigation system
--- Version: 0.4.1
+-- Description: Central K9 navigation task layer
+-- Version: 1.0.0-alpha.1
 --========================================================--
 
 DK9 = DK9 or {}
@@ -10,57 +10,103 @@ DK9.Navigation = {}
 
 local Navigation = DK9.Navigation
 
-Navigation.Target = nil
-Navigation.Mode = 'NONE'
+local mode = 'NONE'
+local target = nil
+
+------------------------------------------------------------
+-- Helpers
+------------------------------------------------------------
 
 local function getDog()
+    if not DK9.Engine then
+        return 0
+    end
+
     return DK9.Engine.GetEntity()
 end
 
 local function dogExists()
     local dog = getDog()
+
     return dog ~= 0 and DoesEntityExist(dog)
 end
 
-local function validEntity(entity)
-    return entity ~= nil and entity ~= 0 and DoesEntityExist(entity)
+local function entityExists(entity)
+    return entity ~= nil
+        and entity ~= 0
+        and DoesEntityExist(entity)
 end
 
-local function prepareDog()
+local function preserveTask()
     if not dogExists() then
         return false
     end
 
     local dog = getDog()
+
     SetBlockingOfNonTemporaryEvents(dog, true)
     SetPedKeepTask(dog, true)
+
     return true
 end
 
-function Navigation.Stop(clearTasks)
-    if dogExists() and clearTasks ~= false then
-        ClearPedTasks(getDog())
-        ClearPedSecondaryTask(getDog())
-    end
-
-    Navigation.Target = nil
-    Navigation.Mode = 'NONE'
+local function setNavigation(newMode, newTarget)
+    mode = newMode
+    target = newTarget
 end
 
-function Navigation.FollowEntity(entity, offsetX, offsetY, speed, stopDistance)
-    if not dogExists() or not validEntity(entity) then
-        return false
+------------------------------------------------------------
+-- Public status
+------------------------------------------------------------
+
+function Navigation.GetMode()
+    return mode
+end
+
+function Navigation.GetTarget()
+    return target
+end
+
+function Navigation.IsBusy()
+    return mode ~= 'NONE'
+end
+
+------------------------------------------------------------
+-- Stop
+------------------------------------------------------------
+
+function Navigation.Stop(clearTasks)
+    if dogExists() and clearTasks ~= false then
+        local dog = getDog()
+
+        ClearPedTasks(dog)
+        ClearPedSecondaryTask(dog)
     end
 
-    Navigation.Stop(false)
+    setNavigation('NONE', nil)
+end
+
+------------------------------------------------------------
+-- Follow an entity at an offset
+------------------------------------------------------------
+
+function Navigation.FollowEntity(
+    entity,
+    offsetX,
+    offsetY,
+    speed,
+    stopDistance
+)
+    if not dogExists() or not entityExists(entity) then
+        return false
+    end
 
     offsetX = tonumber(offsetX) or -0.85
     offsetY = tonumber(offsetY) or 0.10
     speed = tonumber(speed) or 3.5
-    stopDistance = tonumber(stopDistance) or 1.0
+    stopDistance = tonumber(stopDistance) or 1.15
 
-    Navigation.Mode = 'FOLLOW'
-    Navigation.Target = entity
+    setNavigation('FOLLOW', entity)
 
     TaskFollowToOffsetOfEntity(
         getDog(),
@@ -74,22 +120,28 @@ function Navigation.FollowEntity(entity, offsetX, offsetY, speed, stopDistance)
         true
     )
 
-    prepareDog()
+    preserveTask()
+
     return true
 end
 
-function Navigation.GoToEntity(entity, stopDistance, speed)
-    if not dogExists() or not validEntity(entity) then
+------------------------------------------------------------
+-- Move toward an entity
+------------------------------------------------------------
+
+function Navigation.GoToEntity(
+    entity,
+    stopDistance,
+    speed
+)
+    if not dogExists() or not entityExists(entity) then
         return false
     end
-
-    Navigation.Stop(false)
 
     stopDistance = tonumber(stopDistance) or 2.0
     speed = tonumber(speed) or 6.0
 
-    Navigation.Mode = 'RECALL'
-    Navigation.Target = entity
+    setNavigation('ENTITY', entity)
 
     TaskGoToEntity(
         getDog(),
@@ -101,22 +153,28 @@ function Navigation.GoToEntity(entity, stopDistance, speed)
         0
     )
 
-    prepareDog()
+    preserveTask()
+
     return true
 end
 
-function Navigation.GoToCoords(coords, speed, stoppingRange)
+------------------------------------------------------------
+-- Move directly to coordinates
+------------------------------------------------------------
+
+function Navigation.GoToCoords(
+    coords,
+    speed,
+    stoppingRange
+)
     if not dogExists() or type(coords) ~= 'vector3' then
         return false
     end
 
-    Navigation.Stop(false)
-
     speed = tonumber(speed) or 4.0
     stoppingRange = tonumber(stoppingRange) or 1.0
 
-    Navigation.Mode = 'COORDS'
-    Navigation.Target = coords
+    setNavigation('COORDS', coords)
 
     TaskGoStraightToCoord(
         getDog(),
@@ -129,22 +187,28 @@ function Navigation.GoToCoords(coords, speed, stoppingRange)
         stoppingRange
     )
 
-    prepareDog()
+    preserveTask()
+
     return true
 end
 
-function Navigation.GoToCoordsAnyMeans(coords, speed, stoppingRange)
+------------------------------------------------------------
+-- Move to coordinates using the navmesh
+------------------------------------------------------------
+
+function Navigation.GoToCoordsAnyMeans(
+    coords,
+    speed,
+    stoppingRange
+)
     if not dogExists() or type(coords) ~= 'vector3' then
         return false
     end
 
-    Navigation.Stop(false)
-
     speed = tonumber(speed) or 4.0
     stoppingRange = tonumber(stoppingRange) or 1.0
 
-    Navigation.Mode = 'COORDS'
-    Navigation.Target = coords
+    setNavigation('NAVMESH', coords)
 
     TaskGoToCoordAnyMeans(
         getDog(),
@@ -158,18 +222,19 @@ function Navigation.GoToCoordsAnyMeans(coords, speed, stoppingRange)
         stoppingRange
     )
 
-    prepareDog()
+    preserveTask()
+
     return true
 end
 
-function Navigation.GetMode()
-    return Navigation.Mode
-end
+------------------------------------------------------------
+-- Cleanup
+------------------------------------------------------------
 
-function Navigation.GetTarget()
-    return Navigation.Target
-end
+DK9.Events.On('K9:DISMISSED', function()
+    Navigation.Stop(false)
+end)
 
-function Navigation.IsBusy()
-    return Navigation.Mode ~= 'NONE'
-end
+DK9.Events.On('K9:ENTITY_LOST', function()
+    Navigation.Stop(false)
+end)
