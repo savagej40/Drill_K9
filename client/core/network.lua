@@ -2,7 +2,7 @@
 -- drill_k9
 -- File: client/core/network.lua
 -- Description: NUI and server communication
--- Version: 1.0.0-alpha.1
+-- Version: 1.0.0-alpha.2
 --========================================================--
 
 DK9 = DK9 or {}
@@ -122,18 +122,26 @@ RegisterNUICallback('radialCommand', function(data, callback)
 end)
 
 RegisterNUICallback('personSearchSubmit', function(data, callback)
-    local inventory = type(data) == 'table' and data.inventory or nil
+    local report = type(data) == 'table' and data.report or nil
 
-    if not activePersonSearchId or type(inventory) ~= 'string' then
+    if not activePersonSearchId or type(report) ~= 'table' then
         callback({ success = false, error = 'No active person search.' })
         return
     end
 
-    inventory = inventory:sub(1, 1000)
+    local sanitizedReport = {
+        weapons = report.weapons == true,
+        drugs = report.drugs == true,
+        explosives = report.explosives == true,
+        largeCash = report.largeCash == true,
+        evidence = report.evidence == true,
+        other = tostring(report.other or ''):sub(1, 1000)
+    }
+
     TriggerServerEvent(
         'drill_k9:server:submitPersonSearch',
         activePersonSearchId,
-        inventory
+        sanitizedReport
     )
 
     activePersonSearchId = nil
