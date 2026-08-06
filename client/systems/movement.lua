@@ -2,7 +2,7 @@
 -- drill_k9
 -- File: client/systems/movement.lua
 -- Description: K9 posture, heel, and recall behavior
--- Version: 1.0.0-alpha.1
+-- Version: 1.0.0-alpha.2
 --========================================================--
 
 DK9 = DK9 or {}
@@ -29,7 +29,6 @@ local RUN_SPEED = 3.75
 local SPRINT_SPEED = 6.0
 
 local SPEED_REFRESH_DELAY = 1500
-local RECALL_REFRESH_DELAY = 5000
 
 ------------------------------------------------------------
 -- Internal state
@@ -38,7 +37,6 @@ local RECALL_REFRESH_DELAY = 5000
 local currentTask = 'IDLE'
 local currentSpeedMode = 'WALK'
 local lastHeelRefresh = 0
-local lastRecallRefresh = 0
 
 ------------------------------------------------------------
 -- Helpers
@@ -54,7 +52,6 @@ end
 
 local function dogExists()
     local dog = getDog()
-
     return dog ~= 0 and DoesEntityExist(dog)
 end
 
@@ -181,12 +178,7 @@ function Movement.Recall(forceRefresh)
         return false
     end
 
-    local now = GetGameTimer()
-
-    if not forceRefresh
-        and currentTask == 'RECALL'
-        and now - lastRecallRefresh < RECALL_REFRESH_DELAY then
-
+    if not forceRefresh and currentTask == 'RECALL' then
         return true
     end
 
@@ -203,7 +195,6 @@ function Movement.Recall(forceRefresh)
     end
 
     setTask('RECALL')
-    lastRecallRefresh = now
 
     return true
 end
@@ -335,16 +326,12 @@ DK9.Events.On('K9:STATE_CHANGED', function(data)
 
     if data.current == 'FOLLOW' then
         Movement.Follow()
-
     elseif data.current == 'STAY' then
         Movement.Stay()
-
     elseif data.current == 'SIT' then
         Movement.Sit()
-
     elseif data.current == 'DOWN' then
         Movement.Down()
-
     elseif data.current == 'RETURN' then
         Movement.Return()
     end
@@ -367,22 +354,16 @@ DK9.Events.On('K9:COMMAND', function(data)
         else
             DK9.State.Change('FOLLOW')
         end
-
     elseif command == 'stay' then
         DK9.State.Change('STAY')
-
     elseif command == 'sit' then
         DK9.State.Change('SIT')
-
     elseif command == 'down' then
         DK9.State.Change('DOWN')
-
     elseif command == 'return' then
         DK9.State.Change('RETURN')
-
     elseif command == 'heel_left' then
         Movement.SetHeelSide('LEFT')
-
     elseif command == 'heel_right' then
         Movement.SetHeelSide('RIGHT')
     end
@@ -405,13 +386,7 @@ CreateThread(function()
             if distance > RECALL_START_DISTANCE then
                 if currentTask ~= 'RECALL' then
                     Movement.Recall(true)
-
-                elseif GetGameTimer() - lastRecallRefresh
-                    >= RECALL_REFRESH_DELAY then
-
-                    Movement.Recall(true)
                 end
-
             elseif distance <= RECALL_FINISH_DISTANCE then
                 if currentTask ~= 'FOLLOW' then
                     Movement.Heel(true)
@@ -438,7 +413,6 @@ DK9.Events.On('K9:DISMISSED', function()
     currentTask = 'IDLE'
     currentSpeedMode = 'WALK'
     lastHeelRefresh = 0
-    lastRecallRefresh = 0
 end)
 
 ------------------------------------------------------------
