@@ -2,7 +2,7 @@
 -- drill_k9
 -- File: client/systems/search.lua
 -- Description: K9 search behaviors
--- Version: 1.0.0-alpha.2
+-- Version: 1.0.0-alpha.3
 --========================================================--
 
 DK9 = DK9 or {}
@@ -13,6 +13,7 @@ local Search = DK9.Search
 local SEARCH_DISTANCE = 2.0
 local TARGET_MAX_DISTANCE = 8.0
 local SEARCH_DURATION = 3500
+local ALERT_DURATION = 2500
 
 local activeSearch = false
 
@@ -29,6 +30,10 @@ local function notify(message, notificationType)
     if DK9.Network and DK9.Network.Notify then
         DK9.Network.Notify('K9 Search', message, notificationType or 'info')
     end
+end
+
+local function yesNo(value)
+    return value == true and 'YES' or 'NO'
 end
 
 local function getAimedEntity()
@@ -112,6 +117,55 @@ local function waitUntilNear(entity, timeout)
     return false
 end
 
+local function formatSearchResult(result)
+    local report = type(result.report) == 'table' and result.report or {}
+    local targetName = result.targetName or 'Player'
+    local other = tostring(report.other or '')
+
+    if other:match('^%s*$') then
+        other = 'None reported'
+    end
+
+    return table.concat({
+        ('Player: %s'):format(targetName),
+        ('Weapons: %s'):format(yesNo(report.weapons)),
+        ('Drugs: %s'):format(yesNo(report.drugs)),
+        ('Explosives: %s'):format(yesNo(report.explosives)),
+        ('Large Cash: %s'):format(yesNo(report.largeCash)),
+        ('Evidence: %s'):format(yesNo(report.evidence)),
+        ('Other Property: %s'):format(other)
+    }, '\n')
+end
+
+local function performAlert()
+    if not dogExists() then
+        DK9.State.Change('FOLLOW')
+        return
+    end
+
+    ClearPedTasksImmediately(getDog())
+
+    TaskStartScenarioInPlace(
+        getDog(),
+        'WORLD_DOG_BARKING_ROTTWEILER',
+        0,
+        true
+    )
+
+    SetPedKeepTask(getDog(), true)
+    notify('K9 ALERT\nThe K9 alerted on the subject.', 'error')
+
+    CreateThread(function()
+        Wait(ALERT_DURATION)
+
+        if dogExists() then
+            ClearPedTasks(getDog())
+        end
+
+        DK9.State.Change('FOLLOW')
+    end)
+end
+
 function Search.Player(targetPed)
     if activeSearch or not dogExists() then
         return false
@@ -184,17 +238,17 @@ end
 
 RegisterNetEvent('drill_k9:client:personSearchResult', function(result)
     activeSearch = false
+    result = type(result) == 'table' and result or {}
 
-    local inventory = type(result) == 'table' and result.inventory or ''
-    local targetName = type(result) == 'table' and result.targetName or 'Player'
+    notify(formatSearchResult(result), result.alert and 'error' or 'success')
 
-    notify(
-        ('%s reported:\n%s'):format(targetName, inventory),
-        'success'
-    )
+    DK9.Events.Emit('K9:PLAYER_SEARCH_COMPLETE', result)
 
-    DK9.Events.Emit('K9:PLAYER_SEARCH_COMPLETE', result or {})
-    DK9.State.Change('FOLLOW')
+    if result.alert == true then
+        performAlert()
+    else
+        DK9.State.Change('FOLLOW')
+    end
 end)
 
 RegisterNetEvent('drill_k9:client:personSearchCancelled', function(message)
