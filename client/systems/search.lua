@@ -2,7 +2,7 @@
 -- drill_k9
 -- File: client/systems/search.lua
 -- Description: K9 search behaviors
--- Version: 1.0.0-alpha.1
+-- Version: 1.0.0-alpha.2
 --========================================================--
 
 DK9 = DK9 or {}
@@ -39,6 +39,40 @@ local function getAimedEntity()
     end
 
     return 0
+end
+
+local function getClosestPlayerPed(maxDistance)
+    local handler = PlayerPedId()
+    local handlerCoords = GetEntityCoords(handler)
+    local closestPed = 0
+    local closestDistance = maxDistance or TARGET_MAX_DISTANCE
+
+    for _, player in ipairs(GetActivePlayers()) do
+        if player ~= PlayerId() then
+            local ped = GetPlayerPed(player)
+
+            if ped ~= 0 and DoesEntityExist(ped) then
+                local distance = #(handlerCoords - GetEntityCoords(ped))
+
+                if distance <= closestDistance then
+                    closestPed = ped
+                    closestDistance = distance
+                end
+            end
+        end
+    end
+
+    return closestPed
+end
+
+local function getSearchTarget()
+    local aimed = getAimedEntity()
+
+    if aimed ~= 0 and IsPedAPlayer(aimed) then
+        return aimed
+    end
+
+    return getClosestPlayerPed(TARGET_MAX_DISTANCE)
 end
 
 local function getPlayerServerIdFromPed(ped)
@@ -84,7 +118,7 @@ function Search.Player(targetPed)
     end
 
     if not targetPed or targetPed == 0 or not IsPedAPlayer(targetPed) then
-        notify('Aim at a player before selecting Person Search.', 'error')
+        notify('No player is close enough to search.', 'error')
         return false
     end
 
@@ -110,6 +144,16 @@ function Search.Player(targetPed)
 
     if DK9.Navigation then
         DK9.Navigation.GoToEntity(targetPed, SEARCH_DISTANCE, 3.0)
+    else
+        TaskGoToEntity(
+            getDog(),
+            targetPed,
+            -1,
+            SEARCH_DISTANCE,
+            3.0,
+            0.0,
+            0
+        )
     end
 
     CreateThread(function()
@@ -165,7 +209,7 @@ DK9.Events.On('K9:COMMAND', function(data)
     end
 
     if data.command == 'search_player' then
-        Search.Player(getAimedEntity())
+        Search.Player(getSearchTarget())
     end
 end)
 
@@ -174,5 +218,5 @@ DK9.Events.On('K9:DISMISSED', function()
 end)
 
 RegisterCommand('k9searchplayer', function()
-    Search.Player(getAimedEntity())
+    Search.Player(getSearchTarget())
 end, false)
