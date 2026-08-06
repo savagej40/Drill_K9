@@ -2,17 +2,13 @@
 -- drill_k9
 -- File: client/systems/vehicle.lua
 -- Description: K9 vehicle entry, seat selection, and exit
--- Version: 1.0.0-alpha.1
+-- Version: 1.0.0-alpha.2
 --========================================================--
 
 DK9 = DK9 or {}
 DK9.Vehicle = {}
 
 local Vehicle = DK9.Vehicle
-
-------------------------------------------------------------
--- Configuration
-------------------------------------------------------------
 
 Vehicle.Seats = {
     DRIVER = -1,
@@ -23,11 +19,11 @@ Vehicle.Seats = {
 
 local DEFAULT_SEAT = Vehicle.Seats.REAR_RIGHT
 local ENTER_SPEED = 3.5
-local EXIT_FLAGS = 0
 local MAX_ENTRY_VEHICLE_SPEED = 3.0
 local ENTER_TIMEOUT = 15000
 local EXIT_TIMEOUT = 8000
-local NEARBY_VEHICLE_RADIUS = 8.0
+local NEARBY_VEHICLE_RADIUS = 10.0
+local EXIT_PROTECTION_TIME = 1500
 
 local seatFallbackOrder = {
     Vehicle.Seats.REAR_RIGHT,
@@ -35,10 +31,6 @@ local seatFallbackOrder = {
     Vehicle.Seats.PASSENGER,
     Vehicle.Seats.DRIVER
 }
-
-------------------------------------------------------------
--- Internal state
-------------------------------------------------------------
 
 local operation = 'IDLE'
 local activeVehicle = 0
@@ -72,11 +64,7 @@ end
 
 local function notify(message, notificationType)
     if DK9.Network and DK9.Network.Notify then
-        DK9.Network.Notify(
-            'K9',
-            message,
-            notificationType or 'info'
-        )
+        DK9.Network.Notify('K9', message, notificationType or 'info')
     end
 end
 
@@ -91,6 +79,24 @@ local function setVehicleData(inVehicle, seat)
     })
 end
 
+local function getClosestUsableVehicle(coords, radius)
+    local closestVehicle = 0
+    local closestDistance = radius + 0.01
+
+    for _, vehicle in ipairs(GetGamePool('CVehicle')) do
+        if vehicleExists(vehicle) then
+            local distance = #(GetEntityCoords(vehicle) - coords)
+
+            if distance <= radius and distance < closestDistance then
+                closestVehicle = vehicle
+                closestDistance = distance
+            end
+        end
+    end
+
+    return closestVehicle
+end
+
 local function getHandlerVehicle()
     local handler = getHandler()
 
@@ -98,21 +104,10 @@ local function getHandlerVehicle()
         return GetVehiclePedIsIn(handler, false)
     end
 
-    local coords = GetEntityCoords(handler)
-    local vehicle = GetClosestVehicle(
-        coords.x,
-        coords.y,
-        coords.z,
-        NEARBY_VEHICLE_RADIUS,
-        0,
-        70
+    return getClosestUsableVehicle(
+        GetEntityCoords(handler),
+        NEARBY_VEHICLE_RADIUS
     )
-
-    if vehicleExists(vehicle) then
-        return vehicle
-    end
-
-    return 0
 end
 
 local function isSeatValid(vehicle, seat)
@@ -126,12 +121,11 @@ local function isSeatValid(vehicle, seat)
         return false
     end
 
-    local maxPassengers = GetVehicleMaxNumberOfPassengers(vehicle)
-
     if seat == Vehicle.Seats.DRIVER then
         return true
     end
 
+    local maxPassengers = GetVehicleMaxNumberOfPassengers(vehicle)
     return seat >= 0 and seat < maxPassengers
 end
 
@@ -148,9 +142,7 @@ local function findAvailableSeat(vehicle, preferredSeat)
     end
 
     for _, seat in ipairs(seatFallbackOrder) do
-        if seat ~= preferredSeat
-            and isSeatAvailable(vehicle, seat) then
-
+        if seat ~= preferredSeat and isSeatAvailable(vehicle, seat) then
             return seat
         end
     end
@@ -180,6 +172,68 @@ local function getDogSeat(vehicle)
     return -1
 end
 
+local function getSafeExitCoords(vehicle, seat)
+    local sideOffset = 1.75
+
+    if seat == Vehicle.Seats.PASSENGER
+        or seat == Vehicle.Seats.REAR_RIGHT then
+        sideOffset = 1.75
+    else
+        sideOffset = -1.75
+    end
+
+    local coords = GetOffsetFromEntityInWorldCoords(
+        vehicle,
+        sideOffset,
+        -0.5,
+        0.0
+    )
+
+    local foundGround, groundZ = GetGroundZFor_3dCoord(
+        coords.x,
+        coords.y,
+        coords.z + 3.0,
+        false
+    )
+
+    if foundGround then
+        coords = vector3(coords.x, coords.y, groundZ + 0.05)
+    end
+
+    return coords
+end
+
+local function beginExitProtection()
+    if not dogExists() then
+        return nil
+    end
+
+    local dog = getDog()
+    local health = GetEntityHealth(dog)
+
+    SetEntityInvincible(dog, true)
+    SetPedCanRagdoll(dog, false)
+    SetEntityProofs(dog, true, true, true, true, true, true, true, true)
+
+    return health
+end
+
+local function endExitProtection(previousHealth)
+    if not dogExists() then
+        return
+    end
+
+    local dog = getDog()
+
+    if previousHealth and GetEntityHealth(dog) < previousHealth then
+        SetEntityHealth(dog, previousHealth)
+    end
+
+    SetPedCanRagdoll(dog, true)
+    SetEntityProofs(dog, false, false, false, false, false, false, false, false)
+    SetEntityInvincible(dog, false)
+end
+
 local function waitForEntry(vehicle, seat)
     local startedAt = GetGameTimer()
 
@@ -200,7 +254,6 @@ local function waitForEntry(vehicle, seat)
 
         if not IsVehicleSeatFree(vehicle, seat, false) then
             local occupant = GetPedInVehicleSeat(vehicle, seat)
-
             if occupant ~= getDog() then
                 return false
             end
@@ -279,7 +332,7 @@ function Vehicle.Enter(preferredSeat)
     local vehicle = getHandlerVehicle()
 
     if not vehicleExists(vehicle) then
-        notify('No usable vehicle is nearby.', 'error')
+        notify('No usable vehicle is within 10 meters.', 'error')
         return false
     end
 
@@ -339,7 +392,10 @@ function Vehicle.Enter(preferredSeat)
             return
         end
 
-        ClearPedTasks(getDog())
+        if dogExists() then
+            ClearPedTasks(getDog())
+        end
+
         setVehicleData(false, -1)
         setOperation('IDLE')
         activeVehicle = 0
@@ -356,11 +412,7 @@ end
 ------------------------------------------------------------
 
 function Vehicle.Exit()
-    if not dogExists() then
-        return false
-    end
-
-    if Vehicle.IsBusy() then
+    if not dogExists() or Vehicle.IsBusy() then
         return false
     end
 
@@ -369,7 +421,8 @@ function Vehicle.Exit()
         return false
     end
 
-    local vehicle = GetVehiclePedIsIn(getDog(), false)
+    local dog = getDog()
+    local vehicle = GetVehiclePedIsIn(dog, false)
 
     if not vehicleExists(vehicle) then
         return false
@@ -380,23 +433,49 @@ function Vehicle.Exit()
         return false
     end
 
+    local seat = getDogSeat(vehicle)
+    local safeCoords = getSafeExitCoords(vehicle, seat)
+    local previousHealth = beginExitProtection()
+
     activeVehicle = vehicle
     setOperation('EXITING')
-
     DK9.State.Change('EXIT_VEHICLE')
 
-    TaskLeaveVehicle(
-        getDog(),
-        vehicle,
-        EXIT_FLAGS
-    )
+    TaskLeaveVehicle(dog, vehicle, 0)
 
     CreateThread(function()
         local exited = waitForExit(vehicle)
 
         if not exited and dogExists() then
-            ClearPedTasks(getDog())
+            ClearPedTasksImmediately(getDog())
+            SetEntityCoordsNoOffset(
+                getDog(),
+                safeCoords.x,
+                safeCoords.y,
+                safeCoords.z,
+                false,
+                false,
+                false
+            )
+        elseif exited and dogExists() then
+            local dogCoords = GetEntityCoords(getDog())
+            local vehicleCoords = GetEntityCoords(vehicle)
+
+            if #(dogCoords - vehicleCoords) < 0.75 then
+                SetEntityCoordsNoOffset(
+                    getDog(),
+                    safeCoords.x,
+                    safeCoords.y,
+                    safeCoords.z,
+                    false,
+                    false,
+                    false
+                )
+            end
         end
+
+        Wait(EXIT_PROTECTION_TIME)
+        endExitProtection(previousHealth)
 
         setVehicleData(false, -1)
         setOperation('IDLE')
