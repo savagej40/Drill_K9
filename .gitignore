@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+.cache/
+.vscode/
+.idea/
+*.log
+*.tmp
+
+ui/node_modules/
+web/node_modules/
+
+.env
+.env.*
+
+fx-server-data/
