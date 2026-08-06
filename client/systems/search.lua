@@ -1,8 +1,8 @@
 --========================================================--
 -- drill_k9
 -- File: client/systems/search.lua
--- Description: K9 Search System
--- Version: 0.3.0
+-- Description: K9 search behaviors
+-- Version: 1.0.0-alpha.1
 --========================================================--
 
 DK9 = DK9 or {}
@@ -10,299 +10,169 @@ DK9.Search = {}
 
 local Search = DK9.Search
 
-------------------------------------------------------------
--- Configuration
-------------------------------------------------------------
+local SEARCH_DISTANCE = 2.0
+local TARGET_MAX_DISTANCE = 8.0
+local SEARCH_DURATION = 3500
 
-local SEARCH_TIME = 5000
+local activeSearch = false
 
-local PlayerContraband = {
-    "Illegal Narcotics",
-    "Handgun",
-    "Large Amount of Cash",
-    "Stolen Property",
-    "Lock Picks",
-    "Fake Identification",
-    "Brass Knuckles",
-    "Explosives",
-    "Nothing"
-}
-
-local VehicleContraband = {
-    "Illegal Narcotics",
-    "Assault Rifle",
-    "Explosives",
-    "Body Armor",
-    "Cash",
-    "Stolen Firearm",
-    "Nothing"
-}
-
-------------------------------------------------------------
--- Helpers
-------------------------------------------------------------
-
-local function Dog()
+local function getDog()
     return DK9.Engine.GetEntity()
 end
 
-local function Exists()
-
-    local entity = Dog()
-
-    return entity ~= 0 and DoesEntityExist(entity)
-
+local function dogExists()
+    local dog = getDog()
+    return dog ~= 0 and DoesEntityExist(dog)
 end
 
-local function RandomItem(tbl)
-
-    return tbl[math.random(#tbl)]
-
+local function notify(message, notificationType)
+    if DK9.Network and DK9.Network.Notify then
+        DK9.Network.Notify('K9 Search', message, notificationType or 'info')
+    end
 end
 
-------------------------------------------------------------
--- Search Player
-------------------------------------------------------------
+local function getAimedEntity()
+    local aiming, entity = GetEntityPlayerIsFreeAimingAt(PlayerId())
 
-function Search.Player(target)
-
-    if not Exists() then
-        return
-    end
-
-    if not target or target == 0 then
-        return
-    end
-
-    DK9.State.Change("SEARCH_PLAYER")
-
-    TaskGoToEntity(
-        Dog(),
-        target,
-        -1,
-        1.5,
-        2.0,
-        0,
-        0
-    )
-
-    Wait(SEARCH_TIME)
-
-    local item = RandomItem(PlayerContraband)
-
-    DK9.Network.Notify(
-        "K9 Search",
-        ("Player Search Complete\nResult: %s"):format(item),
-        item == "Nothing" and "info" or "success"
-    )
-
-    DK9.Events.Emit("K9:PLAYER_SEARCH_COMPLETE", {
-        target = target,
-        result = item
-    })
-
-    DK9.State.Change("FOLLOW")
-
-end
-
-------------------------------------------------------------
--- Search Vehicle
-------------------------------------------------------------
-
-function Search.Vehicle(vehicle)
-
-    if not Exists() then
-        return
-    end
-
-    if not vehicle or vehicle == 0 then
-        return
-    end
-
-    local coords = GetEntityCoords(vehicle)
-
-    DK9.State.Change("SEARCH_VEHICLE")
-
-    TaskGoStraightToCoord(
-        Dog(),
-        coords.x,
-        coords.y,
-        coords.z,
-        2.0,
-        -1,
-        0.0,
-        0.0
-    )
-
-    Wait(SEARCH_TIME)
-
-    local item = RandomItem(VehicleContraband)
-
-    DK9.Network.Notify(
-        "K9 Search",
-        ("Vehicle Search Complete\nResult: %s"):format(item),
-        item == "Nothing" and "info" or "success"
-    )
-
-    DK9.Events.Emit("K9:VEHICLE_SEARCH_COMPLETE", {
-        vehicle = vehicle,
-        result = item
-    })
-
-    DK9.State.Change("FOLLOW")
-
-end
-
-------------------------------------------------------------
--- Area Search
-------------------------------------------------------------
-
-function Search.Area(coords)
-
-    if not Exists() then
-        return
-    end
-
-    DK9.State.Change("SEARCH_AREA")
-
-    TaskGoStraightToCoord(
-        Dog(),
-        coords.x,
-        coords.y,
-        coords.z,
-        2.0,
-        -1,
-        0.0,
-        0.0
-    )
-
-    Wait(SEARCH_TIME)
-
-    local found = math.random(1,100) <= 35
-
-    if found then
-
-        DK9.Network.Notify(
-            "K9 Search",
-            "Evidence located.",
-            "success"
-        )
-
-    else
-
-        DK9.Network.Notify(
-            "K9 Search",
-            "Nothing located.",
-            "info"
-        )
-
-    end
-
-    DK9.Events.Emit("K9:AREA_SEARCH_COMPLETE", {
-        found = found,
-        coords = coords
-    })
-
-    DK9.State.Change("FOLLOW")
-
-end
-
-------------------------------------------------------------
--- Crosshair Detection
-------------------------------------------------------------
-
-function Search.GetTarget()
-
-    local _, entity = GetEntityPlayerIsFreeAimingAt(PlayerId())
-
-    if entity ~= 0 then
+    if aiming and entity ~= 0 and DoesEntityExist(entity) then
         return entity
     end
 
-    return nil
-
+    return 0
 end
 
-------------------------------------------------------------
--- Radial Commands
-------------------------------------------------------------
+local function getPlayerServerIdFromPed(ped)
+    if not IsPedAPlayer(ped) then
+        return nil
+    end
 
-DK9.Events.On("K9:COMMAND", function(data)
+    local playerIndex = NetworkGetPlayerIndexFromPed(ped)
 
-    if not data then
+    if playerIndex == -1 then
+        return nil
+    end
+
+    return GetPlayerServerId(playerIndex)
+end
+
+local function waitUntilNear(entity, timeout)
+    local startedAt = GetGameTimer()
+
+    while dogExists() and DoesEntityExist(entity) do
+        local distance = #(
+            GetEntityCoords(getDog()) -
+            GetEntityCoords(entity)
+        )
+
+        if distance <= SEARCH_DISTANCE then
+            return true
+        end
+
+        if GetGameTimer() - startedAt >= timeout then
+            return false
+        end
+
+        Wait(100)
+    end
+
+    return false
+end
+
+function Search.Player(targetPed)
+    if activeSearch or not dogExists() then
+        return false
+    end
+
+    if not targetPed or targetPed == 0 or not IsPedAPlayer(targetPed) then
+        notify('Aim at a player before selecting Person Search.', 'error')
+        return false
+    end
+
+    local handlerDistance = #(
+        GetEntityCoords(PlayerPedId()) -
+        GetEntityCoords(targetPed)
+    )
+
+    if handlerDistance > TARGET_MAX_DISTANCE then
+        notify('That player is too far away.', 'error')
+        return false
+    end
+
+    local targetServerId = getPlayerServerIdFromPed(targetPed)
+
+    if not targetServerId then
+        notify('Unable to identify that player.', 'error')
+        return false
+    end
+
+    activeSearch = true
+    DK9.State.Change('SEARCH_PLAYER')
+
+    if DK9.Navigation then
+        DK9.Navigation.GoToEntity(targetPed, SEARCH_DISTANCE, 3.0)
+    end
+
+    CreateThread(function()
+        local reached = waitUntilNear(targetPed, 10000)
+
+        if not reached then
+            activeSearch = false
+            DK9.State.Change('FOLLOW')
+            notify('The K9 could not reach the player.', 'error')
+            return
+        end
+
+        TaskTurnPedToFaceEntity(getDog(), targetPed, 750)
+        Wait(750)
+        TaskStandStill(getDog(), SEARCH_DURATION)
+
+        notify('K9 is searching the player...', 'info')
+        Wait(SEARCH_DURATION)
+
+        TriggerServerEvent(
+            'drill_k9:server:startPersonSearch',
+            targetServerId
+        )
+    end)
+
+    return true
+end
+
+RegisterNetEvent('drill_k9:client:personSearchResult', function(result)
+    activeSearch = false
+
+    local inventory = type(result) == 'table' and result.inventory or ''
+    local targetName = type(result) == 'table' and result.targetName or 'Player'
+
+    notify(
+        ('%s reported:\n%s'):format(targetName, inventory),
+        'success'
+    )
+
+    DK9.Events.Emit('K9:PLAYER_SEARCH_COMPLETE', result or {})
+    DK9.State.Change('FOLLOW')
+end)
+
+RegisterNetEvent('drill_k9:client:personSearchCancelled', function(message)
+    activeSearch = false
+    notify(message or 'The person search was cancelled.', 'error')
+    DK9.State.Change('FOLLOW')
+end)
+
+DK9.Events.On('K9:COMMAND', function(data)
+    if not data or not data.command then
         return
     end
 
-    if data.command == "search_player" then
-
-        local target = Search.GetTarget()
-
-        if target and IsEntityAPed(target) then
-
-            Search.Player(target)
-
-        else
-
-            DK9.Network.Notify(
-                "K9",
-                "Aim at a player.",
-                "warning"
-            )
-
-        end
-
-    elseif data.command == "search_vehicle" then
-
-        local target = Search.GetTarget()
-
-        if target and IsEntityAVehicle(target) then
-
-            Search.Vehicle(target)
-
-        else
-
-            DK9.Network.Notify(
-                "K9",
-                "Aim at a vehicle.",
-                "warning"
-            )
-
-        end
-
-    elseif data.command == "search_area" then
-
-        Search.Area(GetEntityCoords(PlayerPedId()))
-
+    if data.command == 'search_player' then
+        Search.Player(getAimedEntity())
     end
-
 end)
 
-------------------------------------------------------------
--- Console Commands
-------------------------------------------------------------
-
-RegisterCommand("k9searchplayer", function()
-
-    local target = Search.GetTarget()
-
-    if target then
-        Search.Player(target)
-    end
-
+DK9.Events.On('K9:DISMISSED', function()
+    activeSearch = false
 end)
 
-RegisterCommand("k9searchvehicle", function()
-
-    local target = Search.GetTarget()
-
-    if target then
-        Search.Vehicle(target)
-    end
-
-end)
-
-RegisterCommand("k9searcharea", function()
-
-    Search.Area(GetEntityCoords(PlayerPedId()))
-
-end)
+RegisterCommand('k9searchplayer', function()
+    Search.Player(getAimedEntity())
+end, false)
