@@ -19,6 +19,7 @@ import { useK9Store } from './stores/k9'
 import K9Hud from './components/HUD/K9Hud.vue'
 import RadialMenu from './components/Radial/RadialMenu.vue'
 import PersonSearch from './components/Search/PersonSearch.vue'
+import type { PersonSearchReport } from './components/Search/PersonSearch.vue'
 
 const store = useK9Store()
 const personSearchVisible = ref(false)
@@ -39,8 +40,8 @@ async function nuiPost(endpoint: string, payload: Record<string, unknown> = {}) 
   })
 }
 
-async function submitPersonSearch(inventory: string) {
-  await nuiPost('personSearchSubmit', { inventory })
+async function submitPersonSearch(report: PersonSearchReport) {
+  await nuiPost('personSearchSubmit', { report })
   personSearchVisible.value = false
 }
 
