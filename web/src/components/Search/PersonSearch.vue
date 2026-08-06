@@ -4,44 +4,88 @@
       <header>
         <p class="eyebrow">DRILL K9</p>
         <h1>Person Search</h1>
-        <p>List everything currently on your person.</p>
+        <p>Report everything currently on your person.</p>
       </header>
 
+      <section class="category-list">
+        <label v-for="category in categories" :key="category.key" class="category-row">
+          <span>{{ category.label }}</span>
+          <button
+            type="button"
+            class="toggle"
+            :class="{ active: form[category.key] }"
+            @click="form[category.key] = !form[category.key]"
+          >
+            {{ form[category.key] ? 'YES' : 'NO' }}
+          </button>
+        </label>
+      </section>
+
+      <label class="other-label" for="other-property">Other Property</label>
       <textarea
-        v-model="inventory"
+        id="other-property"
+        v-model="form.other"
         maxlength="1000"
-        placeholder="Wallet&#10;Cell phone&#10;Cash&#10;Keys..."
-        autofocus
+        placeholder="Wallet&#10;Cell phone&#10;Keys&#10;Other items..."
       />
 
-      <div class="counter">{{ inventory.length }}/1000</div>
+      <div class="counter">{{ form.other.length }}/1000</div>
 
       <div class="actions">
         <button type="button" class="secondary" @click="cancel">
           Cancel
         </button>
-        <button type="submit" :disabled="inventory.trim().length === 0">
-          Submit
-        </button>
+        <button type="submit">Submit</button>
       </div>
     </form>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { reactive } from 'vue'
+
+export type PersonSearchReport = {
+  weapons: boolean
+  drugs: boolean
+  explosives: boolean
+  largeCash: boolean
+  evidence: boolean
+  other: string
+}
+
+type BooleanReportKey = Exclude<keyof PersonSearchReport, 'other'>
 
 const emit = defineEmits<{
-  submit: [inventory: string]
+  submit: [report: PersonSearchReport]
   cancel: []
 }>()
 
-const inventory = ref('')
+const categories: Array<{ key: BooleanReportKey; label: string }> = [
+  { key: 'weapons', label: 'Weapons' },
+  { key: 'drugs', label: 'Drugs' },
+  { key: 'explosives', label: 'Explosives' },
+  { key: 'largeCash', label: 'Large Amount of Cash' },
+  { key: 'evidence', label: 'Evidence' }
+]
+
+const form = reactive<PersonSearchReport>({
+  weapons: false,
+  drugs: false,
+  explosives: false,
+  largeCash: false,
+  evidence: false,
+  other: ''
+})
 
 function submit() {
-  const value = inventory.value.trim()
-  if (!value) return
-  emit('submit', value)
+  emit('submit', {
+    weapons: form.weapons,
+    drugs: form.drugs,
+    explosives: form.explosives,
+    largeCash: form.largeCash,
+    evidence: form.evidence,
+    other: form.other.trim()
+  })
 }
 
 function cancel() {
@@ -61,7 +105,7 @@ function cancel() {
 }
 
 .search-panel {
-  width: min(520px, 100%);
+  width: min(560px, 100%);
   padding: 28px;
   border: 1px solid rgba(108, 196, 255, 0.32);
   border-radius: 18px;
@@ -76,9 +120,46 @@ header { margin-bottom: 18px; }
 h1 { margin: 0; font-size: 28px; }
 header p:last-child { margin: 8px 0 0; color: rgba(255,255,255,.68); }
 
+.category-list {
+  display: grid;
+  gap: 9px;
+  margin-bottom: 18px;
+}
+
+.category-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 48px;
+  padding: 9px 12px 9px 15px;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 11px;
+  background: rgba(255,255,255,.035);
+  font-weight: 650;
+}
+
+.toggle {
+  min-width: 66px;
+  padding: 8px 12px;
+  background: rgba(255,255,255,.09);
+  color: rgba(255,255,255,.72);
+}
+
+.toggle.active {
+  background: #e25050;
+  color: white;
+}
+
+.other-label {
+  display: block;
+  margin: 0 0 8px;
+  color: rgba(255,255,255,.82);
+  font-weight: 700;
+}
+
 textarea {
   width: 100%;
-  min-height: 220px;
+  min-height: 140px;
   resize: none;
   padding: 16px;
   border: 1px solid rgba(255,255,255,.14);
@@ -94,5 +175,4 @@ textarea:focus { border-color: rgba(100,199,255,.75); }
 .actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 button { padding: 11px 18px; border: 0; border-radius: 10px; background: #38aeea; color: #05111a; font-weight: 800; cursor: pointer; }
 button.secondary { background: rgba(255,255,255,.09); color: white; }
-button:disabled { opacity: .4; cursor: not-allowed; }
 </style>
