@@ -1,7 +1,8 @@
 --========================================================--
 -- drill_k9
 -- File: client/ai/controller.lua
--- Description: Central K9 AI Controller
+-- Description: Central K9 AI state observer
+-- Version: 1.0.0-alpha.1
 --========================================================--
 
 DK9 = DK9 or {}
@@ -9,123 +10,99 @@ DK9.AI = DK9.AI or {}
 
 local AI = DK9.AI
 
-------------------------------------------------------------
--- AI States
-------------------------------------------------------------
-
-AI.State = "IDLE"
-
-AI.LastUpdate = 0
-
-AI.UpdateRate = 250
+local UPDATE_RATE = 500
+local state = 'IDLE'
 
 ------------------------------------------------------------
--- Change AI State
+-- State
 ------------------------------------------------------------
 
-function AI.SetState(state)
-
-    if AI.State == state then
-        return
+function AI.SetState(newState)
+    if state == newState then
+        return false
     end
 
-    AI.State = state
+    state = newState
 
     if Config.Debug then
-        print(("[AI] State -> %s"):format(state))
+        print(('[drill_k9] AI state -> %s'):format(newState))
     end
 
-end
+    DK9.Events.Emit('K9:AI_STATE_CHANGED', {
+        current = newState
+    })
 
-------------------------------------------------------------
--- Get AI State
-------------------------------------------------------------
+    return true
+end
 
 function AI.GetState()
-
-    return AI.State
-
+    return state
 end
 
 ------------------------------------------------------------
--- Main Think Loop
+-- Main observer loop
+--
+-- movement.lua owns movement decisions and tasks.
+-- This controller reports the active high-level behavior only.
 ------------------------------------------------------------
 
 CreateThread(function()
-
     while true do
-
-        Wait(AI.UpdateRate)
+        Wait(UPDATE_RATE)
 
         if not DK9.Engine.IsSpawned() then
-
-            AI.SetState("IDLE")
-
+            AI.SetState('IDLE')
             goto continue
-
         end
 
         local dog = DK9.Engine.GetEntity()
 
-        if dog == 0 then
+        if dog == 0 or not DoesEntityExist(dog) then
+            AI.SetState('IDLE')
             goto continue
         end
 
-        local handler = PlayerPedId()
-
-        local dogCoords = GetEntityCoords(dog)
-
-        local handlerCoords = GetEntityCoords(handler)
-
-        local distance = #(dogCoords-handlerCoords)
-
-        ----------------------------------------------------
-        -- Vehicle
-        ----------------------------------------------------
-
-        if IsPedInAnyVehicle(dog,false) then
-
-            AI.SetState("VEHICLE")
-
+        if IsPedDeadOrDying(dog, true) then
+            AI.SetState('DEAD')
             goto continue
-
         end
 
-        ----------------------------------------------------
-        -- Follow AI
-        ----------------------------------------------------
-
-        if DK9.State.Is("FOLLOW") then
-
-            if distance > 12.0 then
-
-                AI.SetState("RECALL")
-
-                if DK9.Movement.GetCurrentTask() ~= "RECALL" then
-                     DK9.Movement.Recall(true)
-                end
-
-            elseif distance <= 5.0 then
-
-                AI.SetState("HEEL")
-
-                if DK9.Movement.GetCurrentTask() ~= "FOLLOW" then
-                    DK9.Movement.Heel(true)
-                end
-
-            end
-
+        if IsPedInAnyVehicle(dog, false) then
+            AI.SetState('VEHICLE')
             goto continue
-
         end
-        ----------------------------------------------------
-        -- Idle
-        ----------------------------------------------------
 
-        AI.SetState("IDLE")
+        local movementTask = DK9.Movement
+            and DK9.Movement.GetCurrentTask()
+            or 'IDLE'
+
+        if movementTask == 'RECALL' then
+            AI.SetState('RECALL')
+
+        elseif movementTask == 'FOLLOW' then
+            AI.SetState('HEEL')
+
+        elseif movementTask == 'SIT' then
+            AI.SetState('SIT')
+
+        elseif movementTask == 'STAY' then
+            AI.SetState('STAY')
+
+        elseif movementTask == 'DOWN' then
+            AI.SetState('DOWN')
+
+        else
+            AI.SetState('IDLE')
+        end
 
         ::continue::
-
     end
+end)
 
+------------------------------------------------------------
+-- Cleanup
+------------------------------------------------------------
+
+DK9.Events.On('K9:DISMISSED', function()
+    AI.SetState('IDLE')
 end)

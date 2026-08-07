@@ -11,7 +11,7 @@ lua54 'yes'
 
 author 'Drill Development'
 description 'Advanced Standalone K9 System'
-version '0.2.0'
+version '1.0.0-alpha.1'
 
 ---------------------------------------------------------
 -- UI
@@ -38,7 +38,6 @@ shared_scripts {
 ---------------------------------------------------------
 
 client_scripts {
-
     -- Core
     'client/core/engine.lua',
     'client/core/events.lua',
@@ -47,11 +46,15 @@ client_scripts {
 
     -- AI
     'client/ai/navigation.lua',
-    'client/ai/controller.lua',
 
     -- Systems
     'client/systems/spawn.lua',
     'client/systems/movement.lua',
+
+    -- AI observer loads after movement API exists
+    'client/ai/controller.lua',
+
+    -- Remaining systems
     'client/systems/vehicle.lua',
     'client/systems/combat.lua',
     'client/systems/gps.lua',
@@ -59,7 +62,6 @@ client_scripts {
     'client/systems/search.lua',
     'client/systems/tracking.lua',
     'client/systems/animations.lua',
-    'client/systems/ai.lua',
     'client/systems/health.lua',
     'client/systems/items.lua',
     'client/systems/kennel.lua',

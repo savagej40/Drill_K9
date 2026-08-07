@@ -1,8 +1,8 @@
 --========================================================--
 -- drill_k9
 -- File: client/systems/movement.lua
--- Description: K9 heel, recall, and posture movement
--- Version: 0.4.1
+-- Description: Adaptive heel, catch-up, recall, and posture behavior
+-- Version: 1.0.0-alpha.3
 --========================================================--
 
 DK9 = DK9 or {}
@@ -16,21 +16,20 @@ local Navigation = DK9.Navigation
 ------------------------------------------------------------
 
 local HEEL_SIDE = 'LEFT'
-
 local HEEL_LEFT_X = -0.85
 local HEEL_RIGHT_X = 0.85
-local HEEL_FORWARD_Y = 0.10
 
-local HEEL_DISTANCE = 1.15
-local RECALL_START_DISTANCE = 12.0
+local HEEL_DISTANCE = 2.25
+local CATCH_UP_DISTANCE = 4.5
+local RECALL_DISTANCE = 14.0
 local RECALL_FINISH_DISTANCE = 5.0
 
 local WALK_SPEED = 2.0
 local RUN_SPEED = 3.75
 local SPRINT_SPEED = 6.0
+local CATCH_UP_SPEED = 5.0
 
-local SPEED_UPDATE_COOLDOWN = 1500
-local RECALL_REFRESH_INTERVAL = 5000
+local SPEED_REFRESH_DELAY = 1500
 
 ------------------------------------------------------------
 -- Internal state
@@ -38,8 +37,7 @@ local RECALL_REFRESH_INTERVAL = 5000
 
 local currentTask = 'IDLE'
 local currentSpeedMode = 'WALK'
-local lastHeelTaskTime = 0
-local lastRecallTaskTime = 0
+local lastHeelRefresh = 0
 
 ------------------------------------------------------------
 -- Helpers
@@ -55,7 +53,6 @@ end
 
 local function dogExists()
     local dog = getDog()
-
     return dog ~= 0 and DoesEntityExist(dog)
 end
 
@@ -68,14 +65,6 @@ local function getDistanceToHandler()
         GetEntityCoords(getDog()) -
         GetEntityCoords(getHandler())
     )
-end
-
-local function getHeelOffset()
-    if HEEL_SIDE == 'RIGHT' then
-        return HEEL_RIGHT_X, HEEL_FORWARD_Y
-    end
-
-    return HEEL_LEFT_X, HEEL_FORWARD_Y
 end
 
 local function getHandlerSpeedMode()
@@ -92,15 +81,31 @@ local function getHandlerSpeedMode()
     return 'WALK', WALK_SPEED
 end
 
-local function clearDogTasks()
+local function getHeelSettings()
+    local speedMode, movementSpeed = getHandlerSpeedMode()
+    local sideOffset = HEEL_SIDE == 'RIGHT' and HEEL_RIGHT_X or HEEL_LEFT_X
+    local forwardOffset = 0.05
+    local stopDistance = 1.0
+
+    if speedMode == 'RUN' then
+        forwardOffset = -0.20
+        stopDistance = 1.25
+    elseif speedMode == 'SPRINT' then
+        forwardOffset = -0.45
+        stopDistance = 1.55
+    end
+
+    return sideOffset, forwardOffset, stopDistance, speedMode, movementSpeed
+end
+
+local function clearPostureTasks()
     if not dogExists() then
-        return
+        return false
     end
 
     local dog = getDog()
 
     SetPedKeepTask(dog, false)
-
     ClearPedTasksImmediately(dog)
     ClearPedSecondaryTask(dog)
 
@@ -108,73 +113,124 @@ local function clearDogTasks()
     ResetPedStrafeClipset(dog)
     ResetPedWeaponMovementClipset(dog)
 
-    Wait(75)
+    Wait(50)
 
     SetBlockingOfNonTemporaryEvents(dog, true)
     SetPedKeepTask(dog, true)
+
+    return true
+end
+
+local function setTask(taskName)
+    currentTask = taskName
+end
+
+------------------------------------------------------------
+-- Public status
+------------------------------------------------------------
+
+function Movement.GetCurrentTask()
+    return currentTask
+end
+
+function Movement.GetHeelSide()
+    return HEEL_SIDE
 end
 
 ------------------------------------------------------------
 -- Heel
 ------------------------------------------------------------
 
-function Movement.Heel(force)
-
-    if not dogExists() then
+function Movement.Heel(forceRefresh)
+    if not dogExists() or not Navigation then
         return false
     end
 
-    local offsetX, offsetY = getHeelOffset()
+    local now = GetGameTimer()
 
-    local _, speed = getHandlerSpeedMode()
+    if not forceRefresh
+        and currentTask == 'HEEL'
+        and now - lastHeelRefresh < SPEED_REFRESH_DELAY then
 
-    clearDogTasks()
+        return true
+    end
 
-    Navigation.FollowEntity(
+    local offsetX, offsetY, stopDistance, speedMode, movementSpeed =
+        getHeelSettings()
+
+    clearPostureTasks()
+
+    if not Navigation.FollowEntity(
         getHandler(),
         offsetX,
         offsetY,
-        speed,
-        FOLLOW_DISTANCE
-    )
-
-    currentTask = "FOLLOW"
-
-    currentSpeedMode = getHandlerSpeedMode()
-
-    return true
-
-end
-
-------------------------------------------------------------
--- Recall
-------------------------------------------------------------
-
-function Movement.Recall(force)
-
-    if not dogExists() then
+        movementSpeed,
+        stopDistance
+    ) then
         return false
     end
 
-    if not force
-        and currentTask == "RECALL" then
-
-        return true
-
-    end
-
-    clearDogTasks()
-
-    Navigation.GoToEntity(
-        getHandler(),
-        2.0,
-        8.0
-    )
-
-    currentTask = "RECALL"
+    setTask('HEEL')
+    currentSpeedMode = speedMode
+    lastHeelRefresh = now
 
     return true
+end
 
+------------------------------------------------------------
+-- Catch up
+------------------------------------------------------------
+
+function Movement.CatchUp(forceRefresh)
+    if not dogExists() or not Navigation then
+        return false
+    end
+
+    if not forceRefresh and currentTask == 'CATCH_UP' then
+        return true
+    end
+
+    clearPostureTasks()
+
+    if not Navigation.GoToEntity(
+        getHandler(),
+        HEEL_DISTANCE,
+        CATCH_UP_SPEED
+    ) then
+        return false
+    end
+
+    setTask('CATCH_UP')
+
+    return true
+end
+
+------------------------------------------------------------
+-- Long-distance recall
+------------------------------------------------------------
+
+function Movement.Recall(forceRefresh)
+    if not dogExists() or not Navigation then
+        return false
+    end
+
+    if not forceRefresh and currentTask == 'RECALL' then
+        return true
+    end
+
+    clearPostureTasks()
+
+    if not Navigation.GoToEntity(
+        getHandler(),
+        RECALL_FINISH_DISTANCE,
+        SPRINT_SPEED
+    ) then
+        return false
+    end
+
+    setTask('RECALL')
+
+    return true
 end
 
 ------------------------------------------------------------
@@ -188,8 +244,12 @@ function Movement.Follow()
 
     local distance = getDistanceToHandler()
 
-    if distance > RECALL_START_DISTANCE then
+    if distance >= RECALL_DISTANCE then
         return Movement.Recall(true)
+    end
+
+    if distance >= CATCH_UP_DISTANCE then
+        return Movement.CatchUp(true)
     end
 
     return Movement.Heel(true)
@@ -204,16 +264,13 @@ function Movement.Stay()
         return false
     end
 
-    if Navigation then
-        Navigation.Stop()
-    end
-
-    clearDogTasks()
+    Navigation.Stop()
+    clearPostureTasks()
 
     TaskStandStill(getDog(), -1)
     SetPedKeepTask(getDog(), true)
 
-    currentTask = 'STAY'
+    setTask('STAY')
 
     return true
 end
@@ -227,11 +284,8 @@ function Movement.Sit()
         return false
     end
 
-    if Navigation then
-        Navigation.Stop()
-    end
-
-    clearDogTasks()
+    Navigation.Stop()
+    clearPostureTasks()
 
     TaskStartScenarioInPlace(
         getDog(),
@@ -241,8 +295,7 @@ function Movement.Sit()
     )
 
     SetPedKeepTask(getDog(), true)
-
-    currentTask = 'SIT'
+    setTask('SIT')
 
     return true
 end
@@ -256,11 +309,8 @@ function Movement.Down()
         return false
     end
 
-    if Navigation then
-        Navigation.Stop()
-    end
-
-    clearDogTasks()
+    Navigation.Stop()
+    clearPostureTasks()
 
     TaskStartScenarioInPlace(
         getDog(),
@@ -270,8 +320,7 @@ function Movement.Down()
     )
 
     SetPedKeepTask(getDog(), true)
-
-    currentTask = 'DOWN'
+    setTask('DOWN')
 
     return true
 end
@@ -281,11 +330,7 @@ end
 ------------------------------------------------------------
 
 function Movement.Return()
-    if not dogExists() then
-        return false
-    end
-
-    return Movement.Recall(true)
+    return Movement.Follow()
 end
 
 ------------------------------------------------------------
@@ -308,16 +353,8 @@ function Movement.SetHeelSide(side)
     return true
 end
 
-function Movement.GetHeelSide()
-    return HEEL_SIDE
-end
-
-function Movement.GetCurrentTask()
-    return currentTask
-end
-
 ------------------------------------------------------------
--- State listener
+-- State events
 ------------------------------------------------------------
 
 DK9.Events.On('K9:STATE_CHANGED', function(data)
@@ -327,23 +364,19 @@ DK9.Events.On('K9:STATE_CHANGED', function(data)
 
     if data.current == 'FOLLOW' then
         Movement.Follow()
-
     elseif data.current == 'STAY' then
         Movement.Stay()
-
     elseif data.current == 'SIT' then
         Movement.Sit()
-
     elseif data.current == 'DOWN' then
         Movement.Down()
-
     elseif data.current == 'RETURN' then
         Movement.Return()
     end
 end)
 
 ------------------------------------------------------------
--- Command listener
+-- Radial commands
 ------------------------------------------------------------
 
 DK9.Events.On('K9:COMMAND', function(data)
@@ -351,82 +384,81 @@ DK9.Events.On('K9:COMMAND', function(data)
         return
     end
 
-    if data.command == 'follow' then
+    local command = data.command
+
+    if command == 'follow' then
         if DK9.State.Is('FOLLOW') then
             Movement.Follow()
         else
             DK9.State.Change('FOLLOW')
         end
-
-    elseif data.command == 'stay' then
+    elseif command == 'stay' then
         DK9.State.Change('STAY')
-
-    elseif data.command == 'sit' then
+    elseif command == 'sit' then
         DK9.State.Change('SIT')
-
-    elseif data.command == 'down' then
+    elseif command == 'down' then
         DK9.State.Change('DOWN')
-
-    elseif data.command == 'return' then
+    elseif command == 'return' then
         DK9.State.Change('RETURN')
-
-    elseif data.command == 'heel_left' then
+    elseif command == 'heel_left' then
         Movement.SetHeelSide('LEFT')
-
-    elseif data.command == 'heel_right' then
+    elseif command == 'heel_right' then
         Movement.SetHeelSide('RIGHT')
     end
 end)
 
 ------------------------------------------------------------
--- Movement Monitor
+-- Adaptive movement monitor
 ------------------------------------------------------------
 
 CreateThread(function()
-
     while true do
+        Wait(350)
 
-        Wait(500)
+        if DK9.Engine.IsSpawned()
+            and dogExists()
+            and DK9.State.Is('FOLLOW') then
 
-        if not DK9.Engine.IsSpawned() then
-            goto continue
-        end
+            local distance = getDistanceToHandler()
 
-        if not dogExists() then
-            goto continue
-        end
+            if distance >= RECALL_DISTANCE then
+                if currentTask ~= 'RECALL' then
+                    Movement.Recall(true)
+                end
 
-        if not DK9.State.Is("FOLLOW") then
-            goto continue
-        end
+            elseif distance >= CATCH_UP_DISTANCE then
+                if currentTask ~= 'CATCH_UP' then
+                    Movement.CatchUp(true)
+                end
 
-        local distance = getDistanceToHandler()
+            elseif distance <= HEEL_DISTANCE then
+                if currentTask ~= 'HEEL' then
+                    Movement.Heel(true)
+                else
+                    local speedMode = getHandlerSpeedMode()
 
-        if currentTask == "RECALL" then
+                    if speedMode ~= currentSpeedMode
+                        and GetGameTimer() - lastHeelRefresh
+                            >= SPEED_REFRESH_DELAY then
 
-            if distance <= RECALL_FINISH_DISTANCE then
-
-                Movement.Heel(true)
-
+                        Movement.Heel(true)
+                    end
+                end
             end
-
-        elseif currentTask == "FOLLOW" then
-
-            local speedMode = getHandlerSpeedMode()
-
-            if speedMode ~= currentSpeedMode then
-
-                Movement.Heel(true)
-
-            end
-
         end
-
-        ::continue::
-
     end
-
 end)
+
+------------------------------------------------------------
+-- Cleanup
+------------------------------------------------------------
+
+DK9.Events.On('K9:DISMISSED', function()
+    currentTask = 'IDLE'
+    currentSpeedMode = 'WALK'
+    lastHeelRefresh = 0
+end)
+
 ------------------------------------------------------------
 -- Console testing
 ------------------------------------------------------------
